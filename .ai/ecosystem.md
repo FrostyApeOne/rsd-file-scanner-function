@@ -4,7 +4,7 @@
 
 Read it first for any task that touches more than one repository, any message or contract, or when you are not sure which repository owns a behaviour. Then read the owning repo's `AGENTS.md` and `.ai/code-map.md`.
 
-**Verified** against source on 2026-11-17 (branch heads at that date). Version numbers drift. Check the csproj / `Directory.Packages.props` before relying on them.
+**Verified** against source on 2026-11-17 (`main` heads after the contributor-invite permissions merge). Version numbers drift. Check the csproj / `Directory.Packages.props` before relying on them.
 
 ## 1. What the platform is
 
@@ -76,7 +76,8 @@ Named policies: `ServiceCallers` (service principal), `TenantAdminUser` (interac
 ### Roles and permission claims
 
 - Platform SuperAdmin: `Users.RoleId == RoleConstants.AdminRoleId` (fixed GUID, never change it). Tenant Admin, User and custom roles are tenant-scoped `Roles` rows joined by `TenantMembership`.
-- Permission claim format `{ResourceType}:{ResourceKey}:{AccessType}`, e.g. `Template:Any:Manage`, `Application:{guid}:Write`, `Notifications:{tenantId}:{email}:Read`. Merged from `RolePermissions` + per-user `Permissions`.
+- Permission claim format `{ResourceType}:{ResourceKey}:{AccessType}`, e.g. `Template:Any:Manage`, `Application:{guid}:Write`, `Notifications:{tenantId}:{email}:Read`. Merged from `RolePermissions` + per-user `Permissions` (`PermissionClaimMerger`).
+- Contributor invites: the invite form's checkboxes (`AddContributorRequest.Permissions`) become the contributor's effective `Application` / `ApplicationFiles` grants on that application. The merge adds a marker claim `ContributorInvite:{applicationId}:Scope`, and `PermissionClaimEvaluator` then ignores tenant-wide `Any` grants for that application. Any client that rebuilds claims from `GET /v1/me/permissions` must re-emit the markers from `UserAuthorizationDto.InviteScopedApplicationKeys` (API `PermissionClaimProvider`, Web `PermissionsClaimProvider`).
 - `ResourceType` (int values persisted): Application 0, User 1, Template 2, TaskGroup 3, Task 4, Page 5, Field 6, ApplicationFiles 7, File 8, Notifications 9, FileValidation 10. `AccessType`: Read 0, Write 1, Delete 2, Manage 3.
 
 ## 5. Shared contracts
@@ -128,6 +129,7 @@ TenantConfig DB rows `(TenantId, Category, Target)`, Target `Shared` | `Api` | `
 |------|------------------------------------|
 | Web startup | app-only Entra token → `GET /v1/host-config?target=Web` merged over appsettings (Web `PlatformHostConfigurationBootstrapper`). `PlatformBootstrap:Enabled` must be true |
 | Per request | hostname → `GET /v1/tenant-config/resolve` (cached `TenantHostnameCache`) → `GET /v1/tenant-config` (cached `TenantConfigurationCache`, `PlatformBootstrap:TenantConfigurationCacheMinutes`) → per-request OIDC/Entra overlay → session → token exchange (API) |
+| Invite contributor | Web `Applications/Contributors-Invite` (checkbox defaults from template `contributorRoleId`, file options only when the template has uploads) → `POST /v1/Applications/{id}/contributors` with `Permissions` → `AddContributorCommandHandler` + `ContributorInviteAccess.ResolveAccess` (re-invite replaces that application's grants; the owner cannot be invited) → contributor emails |
 | Create application | Web `Templates/Index` → `POST /v1/Applications` (`CreateApplicationCommandHandler`: live-template check, reference generation) → outbox `ApplicationProjectionRequestedEvent(Saved)` for the initial response → `ApplicationCreatedEvent` |
 | Save page | Web `SaveFormPageService` merges posted fields into the session copy (reloaded from API; `StaleFormSessionException` guard) → `POST /v1/Applications/{id}/responses` full body → `AppendResponseVersionAsync` increments `SourceRevision` → outbox `ApplicationProjectionRequestedEvent(Saved)` before commit |
 | Submit | Web `SubmitFormApplicationService` → `POST .../submit` → file-validation gate → `Application.Submit` → outbox `Submitted` → post-commit `ApplicationSubmittedEventHandler`: Notify email + `EventTriggers:ApplicationSubmitted` |
@@ -152,8 +154,8 @@ TenantConfig DB rows `(TenantId, Category, Target)`, Target `Shared` | `Api` | `
 
 | Consumer | CoreLibs and client pins |
 |----------|--------------------------|
-| flexforms-api | Contracts 2.0.2, Security 1.1.32, Caching 1.0.15, Http 1.0.13, Messaging.Contracts 0.1.6, Messaging.MassTransit 0.1.3, AsyncProcessing 1.0.14, Email 0.1.1, FileStorage 0.1.6, Notifications 0.1.7, Utilities 1.0.16, Testing 1.1.25. Publishes Api.Client (net10.0) |
-| flexforms-web | Api.Client 0.0.58 (brings Contracts 2.0.2), Security 2.0.2, Caching 2.0.0, Http 2.0.0, Messaging.Contracts 1.0.0, Messaging.MassTransit 1.0.0, Testing 2.0.0 |
+| flexforms-api | Contracts 2.0.4, Security 2.0.2, Caching / Http / AsyncProcessing / Utilities / Testing 2.0.0, Email / FileStorage / Notifications / Messaging.Contracts / Messaging.MassTransit 1.0.0. Publishes Api.Client (net10.0) |
+| flexforms-web | Api.Client 0.0.59, Contracts 2.0.4 (pinned directly), Security 2.0.2, Caching 2.0.0, Http 2.0.0, Messaging.Contracts 1.0.0, Messaging.MassTransit 1.0.0, Testing 2.0.0 |
 | flexforms-prism | Api.Client 0.0.50, Contracts 1.0.112, Messaging.Contracts 0.1.6 (lags API; see Prism `.ai/dependencies.md`) |
 | rsd-file-scanner-function | ClamAV.Api.Client 1.0.0, Caching 2.0.0, Messaging.Contracts 1.0.0, Messaging.MassTransit 1.0.0 |
 | rsd-clamav-api | AsyncProcessing 2.0.0, Security 2.0.0. Publishes ClamAV.Api.Client |
